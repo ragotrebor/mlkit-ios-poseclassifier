@@ -41,6 +41,7 @@ class CameraViewController: UIViewController {
     .onDeviceObjectCustomMultipleWithClassifier,
     .pose,
     .poseAccurate,
+    .poseClassifier,
     .segmentationSelfie,
   ]
 
@@ -66,9 +67,16 @@ class CameraViewController: UIViewController {
     annotationOverlayView.translatesAutoresizingMaskIntoConstraints = false
     return annotationOverlayView
   }()
+  
+  private lazy var classificationView: ClassificationView = {
+    let view = ClassificationView()
+    view.translatesAutoresizingMaskIntoConstraints = false
+    return view
+  }()
 
   /// Initialized when one of the pose detector rows are chosen. Reset to `nil` when neither are.
   private var poseDetector: PoseDetector? = nil
+  private var poseClassifierProcessor: PoseClassifierProcessor? = nil
 
   /// Initialized when a segmentation row is chosen. Reset to `nil` otherwise.
   private var segmenter: Segmenter? = nil
@@ -241,6 +249,7 @@ class CameraViewController: UIViewController {
       } catch let error {
         detectionError = error
       }
+      
       weak var weakSelf = self
       DispatchQueue.main.sync {
         guard let strongSelf = weakSelf else {
@@ -270,6 +279,11 @@ class CameraViewController: UIViewController {
             }
           )
           strongSelf.annotationOverlayView.addSubview(poseOverlayView)
+        }
+        
+        if let mainPose = poses.first, let classificationResult = self.poseClassifierProcessor?.getPoseResult(pose: mainPose), self.currentDetector == .poseClassifier {
+          classificationView.topLabel.text = "\(classificationResult.lastRepResult)"
+          classificationView.bottomLabel.text = "\(classificationResult.confidenceResult)"
         }
       }
     }
@@ -643,6 +657,13 @@ class CameraViewController: UIViewController {
       annotationOverlayView.trailingAnchor.constraint(equalTo: cameraView.trailingAnchor),
       annotationOverlayView.bottomAnchor.constraint(equalTo: cameraView.bottomAnchor),
     ])
+    cameraView.addSubview(classificationView)
+    NSLayoutConstraint.activate([
+      classificationView.topAnchor.constraint(equalTo: cameraView.topAnchor),
+      classificationView.leadingAnchor.constraint(equalTo: cameraView.leadingAnchor),
+      classificationView.trailingAnchor.constraint(equalTo: cameraView.trailingAnchor),
+      classificationView.bottomAnchor.constraint(equalTo: cameraView.bottomAnchor),
+    ])
   }
 
   private func captureDevice(forPosition position: AVCaptureDevice.Position) -> AVCaptureDevice? {
@@ -687,6 +708,8 @@ class CameraViewController: UIViewController {
     for annotationView in annotationOverlayView.subviews {
       annotationView.removeFromSuperview()
     }
+    self.classificationView.topLabel.text = ""
+    self.classificationView.bottomLabel.text = ""
   }
 
   private func updatePreviewOverlayViewWithLastFrame() {
@@ -896,9 +919,10 @@ class CameraViewController: UIViewController {
       // Same row as before, no need to reset any detectors.
       return
     }
+    
     // Clear the old detector, if applicable.
     switch self.lastDetector {
-    case .pose, .poseAccurate:
+    case .pose, .poseAccurate, .poseClassifier:
       self.poseDetector = nil
       break
     case .segmentationSelfie:
@@ -909,10 +933,14 @@ class CameraViewController: UIViewController {
     }
     // Initialize the new detector, if applicable.
     switch activeDetector {
-    case .pose, .poseAccurate:
+    case .pose, .poseAccurate, .poseClassifier:
       // The `options.detectorMode` defaults to `.stream`
       let options = activeDetector == .pose ? PoseDetectorOptions() : AccuratePoseDetectorOptions()
       self.poseDetector = PoseDetector.poseDetector(options: options)
+      if activeDetector == .poseClassifier {
+        poseClassifierProcessor = PoseClassifierProcessor()
+      }
+      
       break
     case .segmentationSelfie:
       // The `options.segmenterMode` defaults to `.stream`
@@ -1039,7 +1067,7 @@ extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
         height: imageHeight,
         options: options)
 
-    case .pose, .poseAccurate:
+    case .pose, .poseAccurate, .poseClassifier:
       detectPose(in: inputImage, width: imageWidth, height: imageHeight)
     case .segmentationSelfie:
       detectSegmentationMask(in: visionImage, sampleBuffer: sampleBuffer)
@@ -1069,6 +1097,7 @@ public enum Detector: String {
   case onDeviceObjectCustomMultipleWithClassifier = "ODT, custom, multiple, labeling"
   case pose = "Pose Detection"
   case poseAccurate = "Pose Detection, accurate"
+  case poseClassifier = "Pose Classifier"
   case segmentationSelfie = "Selfie Segmentation"
 }
 
